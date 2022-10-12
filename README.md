@@ -11,3 +11,6 @@ Please find the microtomography and histology datasets here: https://doi.org/10.
 
 ## Notes
 2d-2d registrations were done using elastix (https://elastix.lumc.nl/), here the results are given.
+
+# More about slice-to-volume registration
+See the review paper by Ferrante and Paragios (10.1016/j.media.2017.04.010) for an overview. The background of this project is work done within the Biomaterials Science Center, University of Basel, which are represented in papers by Chicherova (10.1111/jmi.12692, 10.1007/978-3-319-10404-1_31), Hieber (10.1038/srep32156), and Khimchenko (10.1016/j.neuroimage.2016.06.005).
