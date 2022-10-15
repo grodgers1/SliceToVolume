@@ -1,6 +1,12 @@
 %% Histology to microCT registration
 % Semi-automatic approach with manually defined correspondences
 % for rat jaw, see publications: 10.3390/app12126286
+%
+% 13/10/2022 CT flag extraFigs, use filenames, include registration
+%               commands, output processing steps to user
+
+extraFigs = 0;  % 1: show additional figures
+rerun = 0;      % 1: rerun non-rigid registration even if it exists already
 
 %% 1. Toolboxes and directories
 % % Add toolboxes
@@ -22,6 +28,7 @@ bf_h_raw = 1;
 pixsize_h = pixsize_h_raw*bf_h_raw;
 
 %% 3. Import data, crop, coarse rotation, and scaling
+disp('3. Import data - takes some time')
 % % uCT
 % Note about uCT gray scale:
 % uint8 28 is equal to -0.00018016 (absorption per pixel length)
@@ -83,12 +90,18 @@ histo_gs = rgb2gray(Inorm); % grayscale normalized histology
 
 % % An alternative would be to use an automatic feature finder to find 
 % % matching points, e.g. SURF or SIFT
-
+disp('4. Manually match points')
 % % points were find by using the following commands and data pointers
 figure, imshow3D(vol,[75,245])
-figure, imagesc(histo), axis equal
-
+%figure, imagesc(histo), axis equal
+figure, imshow(histo,'border', 'tight')   % alternative to show larger
 %% 5. Load matched points
+matchedPointsFile = [histo_dir 'manual_matched_points_matlabimport.xlsx'];
+if ~exist(matchedPointsFile,'file')
+    disp('define point correspondences')
+    return
+end
+disp('5. Load manually matched points')
 % import manual_matched_points_matlabimport.xlsx
 opts = spreadsheetImportOptions("NumVariables", 7);
 opts.Sheet = "Sheet1";
@@ -96,7 +109,7 @@ opts.DataRange = "A2:G51";
 opts.VariableNames = ["mpi", "his_x", "his_y", "uct_x", "uct_y", "uct_z", "uct_w"];
 opts.SelectedVariableNames = ["mpi", "his_x", "his_y", "uct_x", "uct_y", "uct_z", "uct_w"];
 opts.VariableTypes = ["double", "double", "double", "double", "double", "double", "double"];
-manualmatchedpointsmatlabimport = readtable("./example/data/manual_matched_points_matlabimport.xlsx", opts, "UseExcel", false);
+manualmatchedpointsmatlabimport = readtable(matchedPointsFile, opts, "UseExcel", false);
 clear opts
 matchedpoints = table2array(manualmatchedpointsmatlabimport);
 % clean up data 
@@ -116,6 +129,8 @@ uct_w = matchedpoints(:,7); uct_w = 1./uct_w; % point weight uct (1: good, 0.5: 
 uct_x(39-2) = 243; uct_y(39-2) = 140; % fix one point
 
 %% 6. Extract surface fit to these points
+disp('6. Extract surface based on points')
+
 % % fit a surface to these points
 [uct_sy,uct_sx,uct_sz] = size(vol);
 [his_sy,his_sx] = size(histo);
@@ -137,10 +152,26 @@ uct_ZZ = fit_tps(uct_XX,uct_YY);
 exslice = interp3(vol,uct_XX,uct_YY,uct_ZZ,'linear');
 exslice(isnan(exslice)) = 0;
 
+if extraFigs
+    % show surface fitted to landmarks
+    figure
+    mesh(uct_XX, uct_YY, uct_ZZ)
+    hold on
+    plot3(uct_x,uct_y,uct_z,'k*')
+    hold off
+    xlabel('x');ylabel('y');zlabel('z')
+    axis equal tight
+    title(['TPS surface fitted to ' num2str(length(uct_x)) ' landmarks'])
+    % show extracted slice
+    figure
+    imshow(exslice/max(exslice(:)),'Border','tight'); 
+end
+
 %% 7. 2D-2D pre-alignment (feature-based affine)
 % % Ideally, one would now do a true 2d-3d registration, where the volume
 % % is warped. In this case, we extract the surface and warp the 2d extracted
 % % surface
+disp('7. 2D-2D pre-alignment based on points')
 
 % % find nearest points in uct extracted slice
 [K,dist] = dsearchn([uct_XX(:),uct_YY(:),uct_ZZ(:)],[uct_x,uct_y,uct_z]);
@@ -148,10 +179,18 @@ uct_x_p = uct_XX(K);
 uct_y_p = uct_YY(K);
 uct_z_p = uct_ZZ(K);
 
-% checking if this is correct
-i = 20;
-point = [uct_x(i),uct_y(i),uct_z(i)];
-dist2plane = sqrt((point(1)-uct_XX).^2 + (point(2)-uct_YY).^2 + (point(3)-uct_ZZ).^2);
+if extraFigs
+    % checking if this is correct for a single point
+    i = 20;
+    point = [uct_x(i),uct_y(i),uct_z(i)];
+    dist2plane = sqrt((point(1)-uct_XX).^2 + (point(2)-uct_YY).^2 + (point(3)-uct_ZZ).^2);
+    figure
+    imagesc(dist2plane); axis equal tight
+    hold on
+    plot(point(1),point(2),'y*')
+    hold off
+    title('checking distance point->surface')
+end
 
 % % pre-align with point matching
 % use these points (in case want to filter out certain points)
@@ -180,28 +219,71 @@ exslice_affine = imwarp(exslice,tform,'OutputView',imref2d(size(histo)));
 dist_rigid = sqrt((uct_x2_rigid-his_x2).^2+(uct_y2_rigid-his_y2).^2);
 dist_affine = sqrt((uct_x2_affine-his_x2).^2+(uct_y2_affine-his_y2).^2);
 
-% % optional plotting
-% figure, subplot(121), imshowpair(exslice_rigid,histo)
-% hold on, plot(uct_x2_rigid,uct_y2_rigid,'o')
-% plot(his_x2,his_y2,'o')
-% plot([uct_x2_rigid,his_x2]',[uct_y2_rigid,his_y2]','k-')
-% legend({'uct','histo'})
-% title('nonreflectivesimilarity')
-% subplot(122), imshowpair(exslice_affine,histo)
-% hold on, plot(uct_x2_affine,uct_y2_affine,'o')
-% plot(his_x2,his_y2,'o')
-% plot([uct_x2_affine,his_x2]',[uct_y2_affine,his_y2]','k-')
-% legend({'uct','histo'})
-% title('affine')
+if extraFigs
+    % optional plotting of landmark pairs
+    if (1==1)
+        % only show for landmark region
+        maxY=ceil(max([uct_y2_rigid; his_y2]))+10;
+        minY=ceil(min([uct_y2_rigid; his_y2]))-10;
+        figure
+        imshowpair(exslice_rigid(minY:maxY,:),histo(minY:maxY,:,:))
+        hold on, plot(uct_x2_rigid,uct_y2_rigid-minY+1,'o')
+        plot(his_x2,his_y2-minY+1,'o')
+        plot([uct_x2_rigid,his_x2]',[uct_y2_rigid-minY+1,his_y2-minY+1]','k-')
+        legend({'uct','histo'})
+        title(['nonreflectivesimilarity, ' num2str(mean(dist_rigid),'%.1f') 'px'])
+        drawnow
+        figure
+        imshowpair(exslice_affine(minY:maxY,:),histo(minY:maxY,:,:))
+        hold on, plot(uct_x2_affine,uct_y2_affine-minY+1,'o')
+        plot(his_x2,his_y2-minY+1,'o')
+        plot([uct_x2_affine,his_x2]',[uct_y2_affine-minY+1,his_y2-minY+1]','k-')
+        legend({'uct','histo'})
+        title(['affine, ' num2str(mean(dist_affine),'%.1f') 'px'])
+        % visualize motion via comparing transformed moving image
+        figure
+        imshowpair(exslice_rigid(minY:maxY,:),exslice_affine(minY:maxY,:))
+        title('n.r.similarity vs. affine')
+    else
+        % full images
+        figure, subplot(121), imshowpair(exslice_rigid,histo)
+        hold on, plot(uct_x2_rigid,uct_y2_rigid,'o')
+        plot(his_x2,his_y2,'o')
+        plot([uct_x2_rigid,his_x2]',[uct_y2_rigid,his_y2]','k-')
+        legend({'uct','histo'})
+        title('nonreflectivesimilarity')
+        subplot(122), imshowpair(exslice_affine,histo)
+        hold on, plot(uct_x2_affine,uct_y2_affine,'o')
+        plot(his_x2,his_y2,'o')
+        plot([uct_x2_affine,his_x2]',[uct_y2_affine,his_y2]','k-')
+        legend({'uct','histo'})
+        title('affine')
+    end
+end
 
-% % register histology -> uCT
-% transformationType = 'affine';
-% itform = fitgeotrans([his_x2,his_y2],[uct_x2,uct_y2],transformationType);
-% histo_gs = double(rgb2gray(histo));
-% histo_affine = imwarp(histo_gs,itform,'OutputView',imref2d([size(vol,1),size(vol,2)]),'FillValues',256);
+if (1==0)
+    % % register histology -> uCT
+    transformationType = 'affine';
+    itform = fitgeotrans([his_x2,his_y2],[uct_x2,uct_y2],transformationType);
+    histo_gs = double(rgb2gray(histo));
+    histo_affine = imwarp(histo_gs,itform,'OutputView',imref2d([size(vol,1),size(vol,2)]),'FillValues',256);
+    [his_x2_affine,his_y2_affine] = transformPointsForward(itform,his_x2,his_y2);
+    dist_histo_affine = sqrt((uct_x2-his_x2_affine).^2+(uct_y2-his_y2_affine).^2);
+    if extraFigs
+        figure
+        imshowpair(exslice,histo_affine)
+        hold on, plot(uct_x2,uct_y2,'o')
+        plot(his_x2_affine,his_y2_affine,'o')
+        plot([uct_x2,his_x2_affine]',[uct_y2,his_y2_affine]','k-')
+        legend({'uct','histo'})
+        title(['hist->CT affine, ' num2str(mean(dist_histo_affine),'%.1f') 'px'])
+    end
+end
 
 %% 8. 2D-2D non-rigid registration (with elastix) 
-% % define a crop for relevant area to be registered
+disp('8. 2D-2D non-rigid registration (with elastix)')
+
+% define a crop for relevant area to be registered
 cyi = 315;
 cyf = 1165;
 cxi = 2;
@@ -211,21 +293,43 @@ cxf = 701;
 reghist = uint8(255-histo_gs(cyi:cyf,cxi:cxf)); % inverting colors
 reguct = uint8(exslice_affine(cyi:cyf,cxi:cxf));
 
-writemetaimagefile('./example/elastix/histology.mha',reghist,[1,1],[0,0]);
-writemetaimagefile('./example/elastix/microct.mha',reguct,[1,1],[0,0]);
+if extraFigs
+    figure
+    montage([reghist reguct])
+    title('affine aligned slices to be registered')
+end
+
+regDir = './example/elastix2/';
+histoFname = [regDir 'histology.mha'];   % fixed image
+uCTfname = [regDir 'microct.mha'];       % moving image
+
+writemetaimagefile(histoFname,reghist,[1,1],[0,0]);
+writemetaimagefile(uCTfname,reguct,[1,1],[0,0]);
 
 % % Run elastix 
 % I used a very simple registration, could be adapted for improved results
 % $ cd ./example/elastix/
 % $ elastix -f ./histology.mha -m ./microct.mha -out ./ -p ./param_nonrigid_mi.txt
-% The resulting transformation is found 
+% here as unix command assuming known by name elastix
+parFname = [regDir 'param_nonrigid_mi.txt']; % parameter file for non-rigid registration
+
+% The resulting transformation
+tparam = [regDir 'TransformParameters.0.txt'];
+if ~exist(tparam,'file') || rerun
+    % do non-rigid registration
+    %[status,res]=unix(['elastix -f ' histoFname ' -m ' uCTfname ' -out ' regDir ' -p ' parFname]);
+    [status,result] = callelastix(histoFname,uCTfname,regDir,parFname);
+end
 
 % in case you need to get spatial jacobian or want to warp another image, use these: 
-% tparam = './example/elastix/TransformParameters.0.txt';
-% calltransformix('./example/elastix/microct.mha',tparam,'./elastix/'); % warps mha
-% calltransformix('',tparam,'./example/elastix/'); % produces spatial jacobian
+if (1==0)
+    calltransformix(uCTfname,tparam,regDir); % warps mha, output result.mha
+    calltransformix('',tparam,regDir); % produces spatialJacobian.mha
+end
 
-reguct_nr = mha_read_volume('./example/elastix/result.0.mha'); % result of non-rigid registration
+% read non-rigid registration result
+uCTRegFname = [regDir 'result.0.mha'];   % non-rigid registration result
+reguct_nr = mha_read_volume(uCTRegFname); % result of non-rigid registration
 
 % % transforming points with elastix
 % if desired, could use points in registration -- I didn't do this
@@ -237,28 +341,41 @@ itk2matlab = @(coords) [coords(:,2)+1,coords(:,1)+1];
 
 pointsFile = './example/elastix/microct_pts.txt';
 fileID = fopen(pointsFile,'w');
-fprintf(fileID,['index\n']);
+fprintf(fileID,'index\n');
 fprintf(fileID,'%d\n',length(uctpts));
 fprintf(fileID,'%d %d\r\n',matlab2itk(uctpts)');
 
 % % note: we should use inverse for sending points from moving to fixed
 % to get inverse, run following elastix registration:
 % $ cd ./example/elastix/
-% $ -f ./histology.mha -m ./histology.mha -out ./inverse/ -p ./inverse/param_inverse.txt -t0 ./TransformParameters.0.txt
+% $ elastix -f ./histology.mha -m ./histology.mha -out ./inverse/ -p ./inverse/param_inverse.txt -t0 ./TransformParameters.0.txt
 % then edit the resulting TransformParameters file and remove the initial
 % transform, replacing with "NoInitialTransform"
+invRegDir = [regDir 'inverse/'];
+invParFname = [invRegDir 'param_inverse.txt'];
+invtparam = [invRegDir 'TransformParameters.0.txt'];
 
-tparam = './example/elastix/inverse/TransformParameters.0.txt';
+if ~exist(invtparam,'file') || rerun
+    % get inverse transformation
+    [status,res]=unix(['elastix -f ' histoFname ' -m ' histoFname ' -out ' invRegDir ' -p ' parFname ' -t0 ' tparam]);
 
-calltransformix(pointsFile,tparam,'./example/elastix/'); % produces spatial jacobian
+    disp(['NOW edit ' invtparam])
+    disp('replace filename in InitialTransformParametersFileName with "NoInitialTransform" to read')
+    disp('(InitialTransformParametersFileName "NoInitialTransform")')
+    input('when finished, press any key to continue ','s');
+end
 
-pointsFileTransformed = ['./example/elastix/outputpoints.txt'];
+calltransformix(pointsFile,invtparam,regDir); % transform points, outputponts.txt
+
+pointsFileTransformed = [regDir 'outputpoints.txt'];
 t = readtable(pointsFileTransformed);
 regpts1 = itk2matlab([t.Var28,t.Var29]);
 uct_x2_nonrigid = regpts1(:,1);
 uct_y2_nonrigid = regpts1(:,2);
 
 %% 9. Figures and visualizations
+disp('9. Figures and visualization')
+
 figdir = './example/figures/';
 
 prepimage = @(im,vr) uint8(255*(double(im)-vr(1))/(vr(2)-vr(1)));
@@ -392,3 +509,19 @@ ylabel('Distance Error [pixels]')
 set(gca,'YGrid','on')
 f = gcf; f.Position = [163 213.6667 321.3333 258.6667];
 
+%% 10. List numerical results
+disp('          & mean & std & 25th & median & 75th percentile \\')
+dist_tmp = dist_rigid;
+disp(['rigid     & ' num2str(mean(dist_tmp),'%.2f') ' & ' num2str(std(dist_tmp),'%.2f')  ...
+     ' & ' num2str(prctile(dist_tmp,25),'%.2f') ' & ' num2str(median(dist_tmp),'%.2f') ...
+     ' & ' num2str(prctile(dist_tmp,75),'%.2f') ' pxs \\'])
+dist_tmp = dist_affine;
+disp(['affine    & ' num2str(mean(dist_tmp),'%.2f') ' & ' num2str(std(dist_tmp),'%.2f')  ...
+     ' & ' num2str(prctile(dist_tmp,25),'%.2f') ' & ' num2str(median(dist_tmp),'%.2f') ...
+     ' & ' num2str(prctile(dist_tmp,75),'%.2f') ' pxs \\'])
+dist_tmp = dist_nonrigid;
+disp(['non-rigid & ' num2str(mean(dist_tmp),'%.2f') ' & ' num2str(std(dist_tmp),'%.2f')  ...
+     ' & ' num2str(prctile(dist_tmp,25),'%.2f') ' & ' num2str(median(dist_tmp),'%.2f') ...
+     ' & ' num2str(prctile(dist_tmp,75),'%.2f') ' pxs \\'])
+
+disp('Program is finished')
